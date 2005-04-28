@@ -1,0 +1,191 @@
+NAME
+        Catalyst::Model::CDBI::Sweet - Making sweet things sweeter
+
+SYNOPSIS
+        package MyApp::Model::Article;
+        use base 'Catalyst::Model::CDBI::Sweet';
+
+        use DateTime;
+
+        __PACKAGE__->table('article');
+        __PACKAGE__->columns( Primary   => qw[ id ] );
+        __PACKAGE__->columns( Essential => qw[ title created_on created_by ] );
+
+        __PACKAGE__->has_a(
+            created_on => 'DateTime',
+            inflate    => sub { DateTime->from_epoch( epoch => shift ) },
+            deflate    => sub { shift->epoch }
+        );
+
+        MyApp::Model::Article->connection('DBI:driver:database');
+
+        package MyApp::Controller::Article;
+
+        # Simple search, backwards compatible with C<Class::DBI->search>
+
+        MyApp::Model::Article->search( created_by => 'sri', { order_by => 'title' } );
+
+        MyApp::Model::Article->count( created_by => 'sri' );
+
+        MyApp::Model::Article->page( created_by => 'sri', { page => 5 } );
+
+        # More powerful search with deflating
+
+        $query = {
+            created_on => {
+                -between => [
+                    DateTime->new( year => 2004 ),
+                    DateTime->new( year => 2005 ),
+                ]
+            },
+            created_by => [ qw(chansen draven gabb sri) ],
+            title      => {
+                -like  => [ qw( perl% catalyst% ) ]
+            }
+        };
+
+        MyApp::Model::Article->search( $query, { rows => 30 } );
+
+        MyApp::Model::Article->count($query);
+
+        MyApp::Model::Article->page( $query, { rows => 10, page => 2 } );
+
+DESCRIPTION
+    Catalyst::Model::CDBI::Sweet provides convenient count, search, page and
+    cache functions in a sweet package. It integrates this functions with
+    "Class::DBI" in a convenient and efficient way.
+
+RETRIEVING OBJECTS
+    All retrieving methods can take the same query and attributes. Query is
+    the only required parameter.
+
+   query
+    Can be a hash, hashref or a arrayref. Takes the same options as
+    SQL::Abstract where method. If values contain any objects they will be
+    deflated before querying database.
+
+   attributes
+    case, cmp, convert and logic
+        These attributes are passed to SQL::Abstact's constuctor and alter
+        the behavior of query.
+
+            { cmp => 'like' }
+
+    order_by
+        Specifies the sort order of the results.
+
+            { order_by => 'created_on DESC' }
+
+    rows
+        Specifies the maximum number of rows to return. Currently supported
+        RDBM's is Interbase, MaxDB, MySQL, PostgreSQL and SQLite. For other
+        RDBM's it will be emulated.
+
+            { rows => 10 }
+
+    offset
+        Specifies the offset of the first row to return. Defaults to 0 if
+        unspecified.
+
+            { offest => 0 }
+
+    page
+        Specifies the current page in "page". Defaults to 1 if unspecified.
+
+            { page => 1 }
+
+  count
+    Returns a count of the number of rows matching query. "count" will
+    discard "offset", "order_by" and "rows".
+
+        $count = MyApp::Model::Article->count(%query);
+
+  search
+    Returns an iterator in scalar context and a array of objects in list
+    context.
+
+        @objects  = MyApp::Model::Article->search(%query);
+
+        $iterator = MyApp::Model::Article->search(%query);
+
+  page
+    Retuns a page object and a iterator. Page object is an instance of
+    Data::Page.
+
+        ( $page, $iterator ) = MyApp::Model::Article->page( $query, { rows => 10, page => 2 );
+
+        printf( "Results %d - %d of %d Found\n",
+            $page->first, $page->last, $page->total_entries );
+
+CACHING OBJECTS
+    Objects will be stored deflated in cache. Only "Primary" and "Essential"
+    columns will be cached.
+
+  cache
+    Class method, if this is set caching is enabled. Any cache object that
+    has a "get", "set" and "remove" method is supported.
+
+        __PACKAGE__->cache(
+            Cache::FastMmap->new(
+                share_file => '/tmp/cdbi',
+                expire_time => 3600
+            )
+        );
+
+  cache_key
+    returns a cache key for a object consisting of class and primary keys.
+
+   Overloaded methods
+    _init
+        Overrides "Class::DBI"'s internal cache. On cache hit it will return
+        a cached object, on cache miss it will create an new object and
+        store it in cache.
+
+    retrieve
+        On cache hit the object will be inflated by "select" trigger and
+        then served.
+
+    update
+        Object is removed from cache and will be cached on next retrieval.
+
+    delete
+        Object is removed from cache.
+
+UNIVERSALLY UNIQUE IDENTIFIERS
+    If enabled a UUID string will be generated for primary column. A
+    CHAR(36) column is suitable for storage.
+
+        __PACKAGE__->sequence('uuid');
+
+AUTHOR
+    Christian Hansen <ch@ngmedia.com>
+
+THANKS TO
+    Danijel Milicevic, Jesse Sheidlower, Marcus Ramberg, Sebastian Riedel,
+    Viljo Marrandi
+
+SUPPORT
+    #catalyst on <irc://irc.perl.org>
+
+    <http://lists.rawmode.org/mailman/listinfo/catalyst>
+
+    <http://lists.rawmode.org/mailman/listinfo/catalyst-dev>
+
+LICENSE
+    This library is free software; you can redistribute it and/or modify it
+    under the same terms as Perl itself.
+
+SEE ALSO
+    Catalyst
+
+    Class::DBI
+
+    Data::Page
+
+    Data::UUID
+
+    SQL::Abstract
+
+    <http://cpan.robm.fastmail.fm/cache_perf.html> An comparison of
+    different cahing modules for perl.
+
