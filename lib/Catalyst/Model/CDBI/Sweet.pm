@@ -1,33 +1,34 @@
 package Catalyst::Model::CDBI::Sweet;
 
 use strict;
-use base qw[Class::DBI Catalyst::Base];
+use base 'Class::DBI';
 
 use Data::Page;
-use Data::UUID;
 use DBI;
 use List::Util;
 use SQL::Abstract;
 
-# Catalyst component
-
-our $VERSION = '0.01';
-
-sub new {
-    my ( $class, $c ) = @_;
-
-    my $self = Catalyst::Base::new( $class, $c );
-
-    unless ( $class eq __PACKAGE__ ) {
-        no strict 'refs';
-        no warnings 'redefine';
-        *{"$class\::new"} = sub { Class::DBI::new( $class, @_ ) };
-    }
-
-    return $self;
+if ( $^O eq 'MSWin32' ) {
+    require Win32API::GUID;
+}
+else {
+    require Data::UUID;
 }
 
-sub process { 1 }
+our $VERSION = '0.02';
+
+sub new {
+    my $class = shift;
+
+    if ( UNIVERSAL::isa( $class, 'Catalyst::Base' ) ) {
+        my $context = shift;
+        return Catalyst::Base::new( $class, $context );
+    }
+
+    return Class::DBI::new( $class, @_ );
+}
+
+# Class::DBI
 
 #----------------------------------------------------------------------
 # RETRIEVING
@@ -44,11 +45,17 @@ FROM   __TABLE__
 WHERE  %s
 SQL
 
+__PACKAGE__->set_sql( RetrieveLimit => <<'SQL' );
+SELECT __ESSENTIAL__
+FROM   __TABLE__
+%s
+SQL
+
 sub count {
     my $proto = shift;
     my $class = ref($proto) || $proto;
 
-    my ( $query, $attributes ) = $class->_search_args(@_);
+    my ( $criteria, $attributes ) = $class->_search_args(@_);
 
     # make sure we take copy of $attribues since it can be reused
     my $count = { %{$attributes} };
@@ -56,7 +63,11 @@ sub count {
     # no need for LIMIT/OFFSET and ORDER BY in COUNT(*)
     delete @{$count}{qw( rows offset order_by )};
 
-    my ( $sql, $columns, $values ) = $proto->_search( $query, $count );
+    my ( $sql, $columns, $values ) = $proto->_search( $criteria, $count );
+
+    unless ( scalar(@$columns) ) {
+        return $class->count_all;
+    }
 
     my $sth = $class->sql_Count($sql);
 
@@ -65,15 +76,59 @@ sub count {
     return $sth->select_val(@$values);
 }
 
+sub count_from_sql {
+	my ($class, $sql, @vals) = @_;
+	$sql =~ s/^\s*(WHERE)\s*//i;
+	return $class->sql_Count($sql)->select_val(@vals);
+}
+
+sub page {
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+
+    my ( $criteria, $attributes ) = $proto->_search_args(@_);
+
+    my $total   = $class->count( $criteria, $attributes );
+    my $rows    = $attributes->{rows} || 10;
+    my $current = $attributes->{page} || 1;
+
+    my $page = Data::Page->new( $total, $rows, $current );
+
+    $attributes->{rows}   = $page->entries_per_page;
+    $attributes->{offset} = $page->skipped;
+
+    my $iterator = $class->search( $criteria, $attributes );
+
+    return ( $page, $iterator );
+}
+
+sub retrieve_all {
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+
+    unless ( @_ ) {
+        return $class->SUPER::retrieve_all;
+    }
+
+    return $class->search( {}, ( @_ > 1 ) ? { @_ } : shift );
+}
+
 sub search {
     my $proto = shift;
     my $class = ref($proto) || $proto;
 
-    my ( $query, $attributes ) = $class->_search_args(@_);
+    my ( $criteria, $attributes ) = $class->_search_args(@_);
 
-    my ( $sql, $columns, $values ) = $proto->_search( $query, $attributes );
+    my ( $sql, $columns, $values ) = $proto->_search( $criteria, $attributes );
 
-    my $sth = $class->sql_Retrieve($sql);
+    my $sth;
+
+    if ( List::Util::first { $_ !~ /^__(ROWS|OFFSET)$/ } @$columns ) {
+        $sth = $class->sql_Retrieve($sql);
+    }
+    else {
+        $sth = $class->sql_RetrieveLimit($sql);
+    }
 
     $class->_bind_param( $sth, $columns );
 
@@ -85,8 +140,6 @@ sub search {
         my $rows   = $attributes->{rows};
         my $offset = $attributes->{offset} || 0;
 
-        warn sprintf( "slicing iterator, o: %d r: %d\n", $offset, $rows );
-
         $iterator = $iterator->slice( $offset, $offset + $rows - 1 );
     }
 
@@ -94,29 +147,9 @@ sub search {
     return $iterator;
 }
 
-sub page {
-    my $proto = shift;
-    my $class = ref($proto) || $proto;
-
-    my ( $query, $attributes ) = $proto->_search_args(@_);
-
-    my $total = $class->count( $query, $attributes );
-    my $rows    = $attributes->{rows} || 10;
-    my $current = $attributes->{page} || 1;
-
-    my $page = Data::Page->new( $total, $rows, $current );
-
-    $attributes->{rows}   = $page->entries_per_page;
-    $attributes->{offset} = $page->skipped;
-
-    my $iterator = $class->search( $query, $attributes );
-
-    return ( $page, $iterator );
-}
-
 sub _search {
     my $proto      = shift;
-    my $query      = shift;
+    my $criteria   = shift;
     my $attributes = shift;
     my $class      = ref($proto) || $proto;
 
@@ -126,7 +159,7 @@ sub _search {
     # Overide bindtype, we need all columns and values for deflating
     my $abstract = SQL::Abstract->new( %params, bindtype => 'columns' );
 
-    my ( $sql, @bind ) = $abstract->where( $query, $attributes->{order_by} );
+    my ( $sql, @bind ) = $abstract->where( $criteria, $attributes->{order_by} );
 
     $sql =~ s/^\s*(WHERE)\s*//i;
 
@@ -183,23 +216,23 @@ sub _search {
 sub _search_args {
     my $proto = shift;
 
-    my ( $query, $attributes );
+    my ( $criteria, $attributes );
 
     if ( @_ == 2 && ref( $_[0] ) =~ /^(ARRAY|HASH)$/ && ref( $_[1] ) eq 'HASH' )
     {
-        $query      = $_[0];
+        $criteria   = $_[0];
         $attributes = $_[1];
     }
     elsif ( @_ == 1 && ref( $_[0] ) =~ /^(ARRAY|HASH)$/ ) {
-        $query      = $_[0];
+        $criteria   = $_[0];
         $attributes = {};
     }
     else {
         $attributes = @_ % 2 ? pop(@_) : {};
-        $query = {@_};
+        $criteria   = {@_};
     }
 
-    return ( $query, $attributes );
+    return ( $criteria, $attributes );
 }
 
 #----------------------------------------------------------------------
@@ -308,7 +341,13 @@ sub _next_in_sequence {
     my $self = shift;
 
     if ( lc $self->sequence eq 'uuid' ) {
-        return Data::UUID->new->create_str;
+
+        if ( $^O eq 'MSWin32' ) {
+            return Win32API::GUID::CreateGuid();
+        }
+        else {
+            return Data::UUID->new->create_str;
+        }
     }
 
     return $self->sql_Nextval( $self->sequence )->select_val;
@@ -325,7 +364,7 @@ __END__
 =head1 SYNOPSIS
 
     package MyApp::Model::Article;
-    use base 'Catalyst::Model::CDBI::Sweet';
+    use base qw[Catalyst::Model::CDBI::Sweet Catalyst::Base];
 
     use DateTime;
 
@@ -341,10 +380,9 @@ __END__
 
     MyApp::Model::Article->connection('DBI:driver:database');
 
-
     package MyApp::Controller::Article;
 
-    # Simple search, backwards compatible with C<Class::DBI->search>
+    # Simple search
 
     MyApp::Model::Article->search( created_by => 'sri', { order_by => 'title' } );
 
@@ -352,54 +390,56 @@ __END__
 
     MyApp::Model::Article->page( created_by => 'sri', { page => 5 } );
 
+    MyApp::Model::Article->retrieve_all( order_by => 'created_on' );
+
 
     # More powerful search with deflating
 
-    $query = {
+    $criteria = {
         created_on => {
             -between => [
                 DateTime->new( year => 2004 ),
                 DateTime->new( year => 2005 ),
             ]
         },
-        created_by => [ qw(chansen draven gabb sri) ],
+        created_by => [ qw(chansen draven gabb jester sri) ],
         title      => {
             -like  => [ qw( perl% catalyst% ) ]
         }
     };
 
-    MyApp::Model::Article->search( $query, { rows => 30 } );
+    MyApp::Model::Article->search( $criteria, { rows => 30 } );
 
-    MyApp::Model::Article->count($query);
+    MyApp::Model::Article->count($criteria);
 
-    MyApp::Model::Article->page( $query, { rows => 10, page => 2 } );
+    MyApp::Model::Article->page( $criteria, { rows => 10, page => 2 } );
 
 
 =head1 DESCRIPTION
 
-Catalyst::Model::CDBI::Sweet provides convenient count, search, page and
-cache functions in a sweet package. It integrates this functions with
+Catalyst::Model::CDBI::Sweet provides convenient count, search, page, and
+cache functions in a sweet package. It integrates these functions with
 C<Class::DBI> in a convenient and efficient way.
 
 =head1 RETRIEVING OBJECTS
 
-All retrieving methods can take the same query and attributes. Query is the
-only required parameter.
+All retrieving methods can take the same criteria and attributes. Criteria is
+the only required parameter.
 
-=head4 query
+=head2 criteria
 
-Can be a hash, hashref or a arrayref. Takes the same options as
-L<SQL::Abstract> where method. If values contain any objects they will be
-deflated before querying database.
+Can be a hash, hashref, or an arrayref. Takes the same options as the
+L<SQL::Abstract> C<where> method. If values contain any objects, they
+will be deflated before querying the database.
 
-=head4 attributes
+=head2 attributes
 
 =over 4
 
-=item case, cmp, convert and logic
+=item case, cmp, convert, and logic
 
 These attributes are passed to L<SQL::Abstact>'s constuctor and alter the
-behavior of query.
+behavior of the criteria.
 
     { cmp => 'like' }
 
@@ -411,8 +451,8 @@ Specifies the sort order of the results.
 
 =item rows
 
-Specifies the maximum number of rows to return. Currently supported RDBM's is
-Interbase, MaxDB, MySQL, PostgreSQL and SQLite. For other RDBM's it will be
+Specifies the maximum number of rows to return. Currently supported RDBMs are
+Interbase, MaxDB, MySQL, PostgreSQL and SQLite. For other RDBMs, it will be
 emulated.
 
     { rows => 10 }
@@ -433,29 +473,36 @@ Specifies the current page in C<page>. Defaults to 1 if unspecified.
 
 =head2 count
 
-Returns a count of the number of rows matching query. C<count> will discard
-C<offset>, C<order_by> and C<rows>.
+Returns a count of the number of rows matching the criteria. C<count> will
+discard C<offset>, C<order_by>, and C<rows>.
 
-    $count = MyApp::Model::Article->count(%query);
+    $count = MyApp::Model::Article->count(%criteria);
 
 =head2 search
 
-Returns an iterator in scalar context and a array of objects in list context.
+Returns an iterator in scalar context, or an array of objects in list
+context.
 
-    @objects  = MyApp::Model::Article->search(%query);
+    @objects  = MyApp::Model::Article->search(%criteria);
 
-    $iterator = MyApp::Model::Article->search(%query);
+    $iterator = MyApp::Model::Article->search(%criteria);
 
 =head2 page
 
-Retuns a page object and a iterator. Page object is an instance of
+Retuns a page object and an iterator. The page object is an instance of
 L<Data::Page>.
 
-    ( $page, $iterator ) = MyApp::Model::Article->page( $query, { rows => 10, page => 2 );
+    ( $page, $iterator ) = MyApp::Model::Article->page( $criteria, { rows => 10, page => 2 );
 
     printf( "Results %d - %d of %d Found\n",
         $page->first, $page->last, $page->total_entries );
 
+=head2 retrieve_all
+
+Same as C<Class::DBI> with addition that it takes C<attributes> as arguments, 
+C<attributes> can be a hash or a hashref.
+
+    $iterator = MyApp::Model::Article->retrieve_all( order_by => 'created_on' );
 
 =head1 CACHING OBJECTS
 
@@ -464,8 +511,8 @@ columns will be cached.
 
 =head2 cache
 
-Class method, if this is set caching is enabled. Any cache object that has a
-C<get>, C<set> and C<remove> method is supported.
+Class method: if this is set caching is enabled. Any cache object that has a
+C<get>, C<set>, and C<remove> method is supported.
 
     __PACKAGE__->cache(
         Cache::FastMmap->new(
@@ -476,28 +523,30 @@ C<get>, C<set> and C<remove> method is supported.
 
 =head2 cache_key
 
-returns a cache key for a object consisting of class and primary keys.
+Returns a cache key for an object consisting of class and primary keys.
 
-=head4 Overloaded methods
+=head2 Overloaded methods
 
 =over 4
 
 =item _init
 
-Overrides C<Class::DBI>'s internal cache. On cache hit it will return a cached
-object, on cache miss it will create an new object and store it in cache.
+Overrides C<Class::DBI>'s internal cache. On a cache hit, it will return
+a cached object; on a cache miss it will create an new object and store
+it in the cache.
 
 =item retrieve
 
-On cache hit the object will be inflated by C<select> trigger and then served.
+On a cache hit the object will be inflated by the C<select> trigger and
+then served.
 
 =item update
 
-Object is removed from cache and will be cached on next retrieval.
+Object is removed from the cache and will be cached on next retrieval.
 
 =item delete
 
-Object is removed from cache.
+Object is removed from the cache.
 
 =back
 

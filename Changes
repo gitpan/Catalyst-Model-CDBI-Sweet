@@ -1,4 +1,9 @@
 Revision history for Perl extension Catalyst::Model::CDBI::Sweet
 
+0.02  Sat Apr 30 23 09:00 2005
+        - Sweet is no longer tied to Catalyst
+        - Added support for Win32
+        - Added retrieve_all
+
 0.01  Wed Apr 27 01:00:00 2005
         - original version.
