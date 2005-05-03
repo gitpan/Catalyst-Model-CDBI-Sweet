@@ -1,6 +1,11 @@
 Revision history for Perl extension Catalyst::Model::CDBI::Sweet
 
-0.02  Sat Apr 30 23 09:00 2005
+0.03  Tue May 03 17:24:00 2005
+        - Added support for calling count without arguments
+        - Fixed Documentation
+        - Fixed search SQL bug, a WHERE clause was missing from the statement
+
+0.02  Sat Apr 30  09:00 2005
         - Sweet is no longer tied to Catalyst
         - Added support for Win32
         - Added retrieve_all

@@ -15,7 +15,7 @@ else {
     require Data::UUID;
 }
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 sub new {
     my $class = shift;
@@ -54,6 +54,10 @@ SQL
 sub count {
     my $proto = shift;
     my $class = ref($proto) || $proto;
+
+    unless ( @_ ) {
+        return $class->count_all;
+    }
 
     my ( $criteria, $attributes ) = $class->_search_args(@_);
 
@@ -123,11 +127,14 @@ sub search {
 
     my $sth;
 
-    if ( List::Util::first { $_ !~ /^__(ROWS|OFFSET)$/ } @$columns ) {
-        $sth = $class->sql_Retrieve($sql);
+    if ( ref($criteria) eq 'HASH' && scalar( keys %{ $criteria } ) == 0 ) {
+        $sth = $class->sql_RetrieveLimit($sql);
+    }
+    elsif ( ref($criteria) eq 'ARRAY' && scalar( @{ $criteria } ) == 0 ) {
+        $sth = $class->sql_RetrieveLimit($sql);
     }
     else {
-        $sth = $class->sql_RetrieveLimit($sql);
+        $sth = $class->sql_Retrieve($sql);
     }
 
     $class->_bind_param( $sth, $columns );
@@ -350,7 +357,7 @@ sub _next_in_sequence {
         }
     }
 
-    return $self->sql_Nextval( $self->sequence )->select_val;
+    return $self->SUPER::_next_in_sequence;
 }
 
 1;
@@ -461,7 +468,7 @@ emulated.
 
 Specifies the offset of the first row to return. Defaults to 0 if unspecified.
 
-    { offest => 0 }
+    { offset => 0 }
 
 =item page
 
@@ -499,7 +506,7 @@ L<Data::Page>.
 
 =head2 retrieve_all
 
-Same as C<Class::DBI> with addition that it takes C<attributes> as arguments, 
+Same as C<Class::DBI> with addition that it takes C<attributes> as arguments,
 C<attributes> can be a hash or a hashref.
 
     $iterator = MyApp::Model::Article->retrieve_all( order_by => 'created_on' );

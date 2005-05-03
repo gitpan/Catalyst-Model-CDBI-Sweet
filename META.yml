@@ -1,6 +1,6 @@
 ---
 name: Catalyst-Model-CDBI-Sweet
-version: 0.02
+version: 0.03
 author:
   - Christian Hansen <ch@ngmedia.com>
 abstract: ~
@@ -15,5 +15,5 @@ requires:
 provides:
   Catalyst::Model::CDBI::Sweet:
     file: lib/Catalyst/Model/CDBI/Sweet.pm
-    version: 0.02
+    version: 0.03
 generated_by: Module::Build version 0.26
