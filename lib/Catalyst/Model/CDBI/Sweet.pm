@@ -5,9 +5,9 @@ use base qw[Class::DBI::Sweet Catalyst::Base];
 
 use Catalyst::Exception;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
-*new = \&Catalyst::Base::new;
+*new = Catalyst::Base->can('new');
 
 sub _croak {
     my ( $self, $message ) = @_;

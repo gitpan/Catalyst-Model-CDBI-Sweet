@@ -1,5 +1,8 @@
 Revision history for Perl extension Catalyst::Model::CDBI::Sweet
 
+0.06  Thu Nov 03 16:19:00 2005
+        - use can to future proof the model. 
+        
 0.05  Thu Oct 27 17:13:00 2005
         - Use Catalyst::Exception
 		- Removed dependency on UUID class
